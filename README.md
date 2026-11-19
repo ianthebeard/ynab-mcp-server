@@ -110,8 +110,8 @@ accounts are excluded, so these report spending rather than money movement.
 
 | Tool | What it does |
 | --- | --- |
-| `ynab_create_transaction` | Creates a transaction. Needs `date`, `amount`, an account (`accountId` or `accountName`) and a payee (`payeeId` or `payeeName`); category optional as `categoryId` or `categoryName`. |
-| `ynab_update_transaction` | Updates any subset of an existing transaction's fields. |
+| `ynab_create_transaction` | Creates a transaction. Needs `date`, `amount`, an account (`accountId` or `accountName`) and a payee (`payeeId` or `payeeName`); category optional as `categoryId` or `categoryName`. Pass `splits` instead of a category to split a purchase across categories; the legs must add up to `amount`. |
+| `ynab_update_transaction` | Updates any subset of an existing transaction's fields. `splits` turns an unsplit transaction into a split; YNAB won't change the legs of an existing split, so delete and recreate it for that. |
 | `ynab_delete_transaction` | Deletes a transaction. Not undoable. |
 | `ynab_approve_transaction` | Approves (or un-approves) one transaction. |
 | `ynab_bulk_approve_transactions` | Approves an array of transaction IDs in one API call. |
