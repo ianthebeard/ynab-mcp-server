@@ -3,9 +3,10 @@ import * as ynab from "ynab";
 import { getErrorMessage } from "./errorUtils.js";
 import { toMilliunits } from "./money.js";
 import { resolveName } from "./match.js";
+import { buildSubtransactions, loadCategories, splitsInputSchema, SplitInput } from "./splits.js";
 
 export const name = "ynab_create_transaction";
-export const description = "Creates a new transaction in your YNAB budget. The account can be given as accountId or accountName, and the category as categoryId or categoryName - names are fuzzy-matched against the budget. Either payeeId or payeeName must also be provided.";
+export const description = "Creates a new transaction in your YNAB budget. The account can be given as accountId or accountName, and the category as categoryId or categoryName - names are fuzzy-matched against the budget. Either payeeId or payeeName must also be provided. To split a purchase across categories, pass `splits` (legs that add up to the amount) instead of a category.";
 export const inputSchema = {
   budgetId: z.string().optional().describe("The id of the budget to create the transaction in (optional, defaults to the budget set in the YNAB_BUDGET_ID environment variable)"),
   accountId: z.string().optional().describe("The id of the account to create the transaction in (optional if accountName is provided)"),
@@ -20,6 +21,7 @@ export const inputSchema = {
   cleared: z.boolean().optional().describe("Whether the transaction is cleared (optional, defaults to false)"),
   approved: z.boolean().optional().describe("Whether the transaction is approved (optional, defaults to false)"),
   flagColor: z.string().optional().describe("The transaction flag color (red, orange, yellow, green, blue, purple) (optional)"),
+  splits: splitsInputSchema,
 };
 
 interface CreateTransactionInput {
@@ -36,6 +38,7 @@ interface CreateTransactionInput {
   cleared?: boolean;
   approved?: boolean;
   flagColor?: string;
+  splits?: SplitInput[];
 }
 
 function getBudgetId(inputBudgetId?: string): string {
@@ -72,12 +75,7 @@ async function resolveCategoryId(
   if (input.categoryId) return { id: input.categoryId };
   if (!input.categoryName) return {};
 
-  const response = await api.categories.getCategories(budgetId);
-  const categories = response.data.category_groups
-    .filter((group) => !group.deleted && !group.hidden)
-    .flatMap((group) => group.categories)
-    .filter((category) => !category.deleted && !category.hidden);
-
+  const categories = await loadCategories(budgetId, api);
   const match = resolveName(input.categoryName, categories, "category");
   return { id: match.id, matchedName: match.name };
 }
@@ -90,10 +88,17 @@ export async function execute(input: CreateTransactionInput, api: ynab.API) {
       throw new Error("Either payeeId or payeeName must be provided");
     }
 
+    if (input.splits && (input.categoryId || input.categoryName)) {
+      throw new Error("Give either a category or splits, not both - each split leg carries its own category");
+    }
+
     const account = await resolveAccountId(input, budgetId, api);
     const category = await resolveCategoryId(input, budgetId, api);
 
     const milliunitAmount = toMilliunits(input.amount);
+    const split = input.splits
+      ? await buildSubtransactions(input.splits, milliunitAmount, budgetId, api)
+      : undefined;
 
     const transaction: ynab.PostTransactionsWrapper = {
       transaction: {
@@ -102,7 +107,9 @@ export async function execute(input: CreateTransactionInput, api: ynab.API) {
         amount: milliunitAmount,
         payee_id: input.payeeId,
         payee_name: input.payeeName,
-        category_id: category.id,
+        // A split's parent carries no category; the legs do.
+        category_id: split ? null : category.id,
+        subtransactions: split?.subtransactions,
         memo: input.memo,
         cleared: input.cleared ? ynab.TransactionClearedStatus.Cleared : ynab.TransactionClearedStatus.Uncleared,
         approved: input.approved ?? false,
@@ -126,6 +133,7 @@ export async function execute(input: CreateTransactionInput, api: ynab.API) {
         // Echo back what the names resolved to, so a wrong guess is visible.
         matchedAccount: account.matchedName,
         matchedCategory: category.matchedName,
+        matchedSplitCategories: split?.matchedCategories,
         message: "Transaction created successfully",
       }, null, 2) }]
     };
